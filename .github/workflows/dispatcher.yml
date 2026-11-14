@@ -186,11 +186,11 @@ jobs:
           git commit -m "chore: update mail state [skip ci]"
           for i in 1 2 3; do
             if git push; then exit 0; fi
-            echo "push 失败，拉取远端后重试（第 $i 次）"
-            git pull --rebase -X theirs origin master || git reset --hard origin/master
-            git add state
-            git diff --cached --quiet && { echo "远端已包含相同状态"; exit 0; }
-            git commit -m "chore: update mail state [skip ci]" || true
+            echo "push 失败（第 $i 次），rebase 后重试"
+            if ! git pull --rebase -X theirs origin master; then
+              git rebase --abort
+              exit 1
+            fi
             sleep 5
           done
           echo "push 连续 3 次失败"

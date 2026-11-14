@@ -544,10 +544,11 @@ def main():
             load_recent_people(),
         )
         retry_note = (
-            "\n\n上次输出不合格（常见原因：JSON 字符串内出现未转义的英文双引号、"
-            "缺少 ancient_count/total_people 字段、标题不足 90 字，或正文缺少“适用主题/运用示范”）。"
+            "\n\n上次输出不合格（{err}）。"
             "请严格只输出一个合法 JSON 对象；标题必须以人物姓名·开头且为 90-110 字；"
             "正文必须完整并以中文句号结尾；字符串内引用一律使用中文引号“”，不要输出任何其他文字。"
+            "\n\n标题不足 90 字时的补足方法：依次补充 生平细节（出身/经历）、代表著作及篇幅、"
+            "具体成就数据、历史评价、原话语录；禁止用“等等”“诸多”或省略号凑长度。"
             "\n\n标题长度示例（93 字，合格；你的标题必须同样长，不能短于 90 字）：\n"
             "李时珍·明代民间走方医出身·三次乡试落第后弃科举从医·跋涉万里遍尝百草·"
             "历时二十七载三易其稿著成一百九十万字本草纲目·收载药物一千八百余种·"
@@ -556,7 +557,14 @@ def main():
         data = None
         last_error = None
         for attempt in range(1, 3):
-            stdout = call_model(cfg, prompt if attempt == 1 else prompt + retry_note)
+            if attempt == 1:
+                use_prompt = prompt
+            else:
+                # 把上一次的具体失败原因注入重试提示（避免 format 注入：手工拼接）
+                use_prompt = prompt + retry_note.replace(
+                    "{err}", (str(last_error) or "未知原因")[:200]
+                )
+            stdout = call_model(cfg, use_prompt)
             try:
                 data = extract_json(stdout)
                 try:
