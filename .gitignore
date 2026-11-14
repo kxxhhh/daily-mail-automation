@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+scripts/*.log
+scripts/essay.env
+state/*.tmp

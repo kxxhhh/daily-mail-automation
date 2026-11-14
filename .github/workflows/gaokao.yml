@@ -1,0 +1,38 @@
+name: gaokao-countdown
+
+on:
+  schedule:
+    # 北京时间每天 05:30 -> UTC 前一天 21:30
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gaokao-countdown
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send countdown
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SENDER: ${{ secrets.SENDER }}
+          AUTH_CODE: ${{ secrets.AUTH_CODE }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+        run: python scripts/gaokao_countdown.py
