@@ -57,11 +57,11 @@ jobs:
           SENDER: ${{ secrets.SENDER }}
           AUTH_CODE: ${{ secrets.AUTH_CODE }}
           RECEIVER: ${{ secrets.RECEIVER }}
-          LONGCAT_API_KEY: ${{ secrets.LONGCAT_API_KEY }}
-          LONGCAT_MODEL: LongCat-2.5
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          ZHIPU_MODEL: glm-4.7-flash
           STATE_DIR: ${{ github.workspace }}/state
         run: |
-          # 自动重试：LongCat 偶发读超时（本次运行实测），最多尝试 3 次；失败基本发生在发信前，重试不会重复发信
+          # 自动重试：模型 API 偶发读超时（LongCat 实测过），最多尝试 3 次；失败基本发生在发信前，重试不会重复发信
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
             if python scripts/essay_hourly.py --force; then

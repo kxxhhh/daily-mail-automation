@@ -36,16 +36,16 @@ MODEL_TIMEOUT = 480
 SUPPLEMENT_TIMEOUT = 6
 SUPPLEMENT_MAX_ITEMS = 12
 
-DEFAULT_MODEL = "LongCat-2.5"
-DEFAULT_BASE_URL = "https://api.longcat.chat/openai/v1"
+DEFAULT_MODEL = "glm-4.7-flash"
+DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ENV_KEYS = (
     "SMTP_HOST",
     "SMTP_PORT",
     "SENDER",
     "AUTH_CODE",
     "RECEIVER",
-    "LONGCAT_MODEL",
-    "LONGCAT_BASE_URL",
+    "ZHIPU_MODEL",
+    "ZHIPU_BASE_URL",
 )
 REQUIRED_ENV = ("SMTP_HOST", "SMTP_PORT", "SENDER", "AUTH_CODE", "RECEIVER")
 
@@ -99,18 +99,18 @@ def load_env():
     missing = [k for k in REQUIRED_ENV if not values.get(k)]
     if missing:
         raise RuntimeError(f"配置缺少字段: {', '.join(missing)}")
-    values.setdefault("LONGCAT_MODEL", DEFAULT_MODEL)
-    values.setdefault("LONGCAT_BASE_URL", DEFAULT_BASE_URL)
+    values.setdefault("ZHIPU_MODEL", DEFAULT_MODEL)
+    values.setdefault("ZHIPU_BASE_URL", DEFAULT_BASE_URL)
     return values
 
 
 def load_api_key():
-    key = (os.environ.get("LONGCAT_API_KEY") or "").strip()
+    key = (os.environ.get("ZHIPU_API_KEY") or "").strip()
     if key:
         return key
     for path in (
-        HOME / ".config" / "opencode" / "longcat-api-key",
-        Path.home() / ".config" / "opencode" / "longcat-api-key",
+        HOME / ".config" / "opencode" / "zhipu-api-key",
+        Path.home() / ".config" / "opencode" / "zhipu-api-key",
     ):
         try:
             if path.is_file():
@@ -119,7 +119,7 @@ def load_api_key():
                     return value
         except Exception:
             pass
-    raise RuntimeError("缺少 LONGCAT_API_KEY（环境变量或 ~/.config/opencode/longcat-api-key）")
+    raise RuntimeError("缺少 ZHIPU_API_KEY（环境变量或 ~/.config/opencode/zhipu-api-key）")
 
 
 def load_state(today_monday):
@@ -313,14 +313,13 @@ def build_prompt(today, ancient_count, total_count, need_ancient, supplement="",
 
 
 def call_model(cfg, prompt):
-    """直接调用 LongCat OpenAI 兼容接口，避免依赖 GitHub Actions 里的 opencode CLI。"""
-    base = cfg["LONGCAT_BASE_URL"].rstrip("/")
+    """直接调用智谱 GLM OpenAI 兼容接口（open.bigmodel.cn），避免依赖 GitHub Actions 里的 opencode CLI。"""
+    base = cfg["ZHIPU_BASE_URL"].rstrip("/")
     payload = {
-        "model": cfg["LONGCAT_MODEL"],
+        "model": cfg["ZHIPU_MODEL"],
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 32768,
         "temperature": 0.6,
-        "thinking": {"type": "enabled"},
     }
     req = urllib.request.Request(
         base + "/chat/completions",
@@ -331,30 +330,30 @@ def call_model(cfg, prompt):
         },
         method="POST",
     )
-    logging.info("调用 LongCat 生成素材")
+    logging.info("调用智谱 GLM 生成素材")
     try:
         with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:800].decode("utf-8", "replace")
-        raise RuntimeError(f"LongCat HTTP {exc.code}：{detail}")
+        raise RuntimeError(f"智谱 GLM HTTP {exc.code}：{detail}")
     except Exception as exc:
-        raise RuntimeError(f"LongCat 请求失败：{exc}")
+        raise RuntimeError(f"智谱 GLM 请求失败：{exc}")
 
     try:
         body = json.loads(raw)
     except json.JSONDecodeError:
-        raise RuntimeError(f"LongCat 返回非 JSON：{raw[:800]!r}")
+        raise RuntimeError(f"智谱 GLM 返回非 JSON：{raw[:800]!r}")
 
     choices = body.get("choices") or []
     if not choices:
-        raise RuntimeError(f"LongCat 返回无 choices：{json.dumps(body, ensure_ascii=False)[:800]}")
+        raise RuntimeError(f"智谱 GLM 返回无 choices：{json.dumps(body, ensure_ascii=False)[:800]}")
     message = choices[0].get("message") or {}
     content = (message.get("content") or "").strip()
     if not content:
         reason = (message.get("reasoning_content") or "")[:300]
         raise RuntimeError(
-            f"LongCat 未返回正文（finish_reason={choices[0].get('finish_reason')}）：{reason}"
+            f"智谱 GLM 未返回正文（finish_reason={choices[0].get('finish_reason')}）：{reason}"
         )
     return content
 

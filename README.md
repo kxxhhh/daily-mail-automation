@@ -5,7 +5,7 @@
 1. **高中作文素材**：北京时间 05:30 / 08:30 / 11:30 / 14:30 / 17:30 / 20:30 / 23:30，每次 1 位人物。
 2. **2027 高考倒计时**：北京时间每天 05:30，标题包含倒计时、日期、阶段提示、实时教育热点与生日提醒。
 
-模型：`LongCat-2.5`（通过 LongCat OpenAI 兼容接口调用）。
+模型：智谱 `glm-4.7-flash`（通过智谱开放平台 OpenAI 兼容接口调用）。
 
 ## 目录
 
@@ -53,7 +53,7 @@ gh workflow run keepalive.yml --repo kxxhhh/daily-mail-automation
 | `SENDER` | 发件邮箱 |
 | `AUTH_CODE` | 邮箱授权码 |
 | `RECEIVER` | 收件邮箱 |
-| `LONGCAT_API_KEY` | LongCat API Key |
+| `ZHIPU_API_KEY` | 智谱开放平台 API Key |
 
 密钥只通过环境变量注入，不写入仓库文件，也不会出现在日志中。
 
@@ -67,7 +67,7 @@ export SMTP_PORT=465
 export SENDER=you@example.com
 export AUTH_CODE=your-auth-code
 export RECEIVER=to@example.com
-export LONGCAT_API_KEY=your-longcat-key
+export ZHIPU_API_KEY=your-zhipu-key
 
 python scripts/essay_hourly.py --force
 python scripts/gaokao_countdown.py

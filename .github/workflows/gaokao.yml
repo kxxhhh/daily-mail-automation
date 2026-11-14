@@ -55,7 +55,7 @@ jobs:
           AUTH_CODE: ${{ secrets.AUTH_CODE }}
           RECEIVER: ${{ secrets.RECEIVER }}
         run: |
-          # 自动重试：LongCat/网络偶发超时，最多尝试 3 次（发送失败基本发生在发信前，重试不会重复发信）
+          # 自动重试：网络/上游偶发超时，最多尝试 3 次（发送失败基本发生在发信前，重试不会重复发信）
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
             if python scripts/gaokao_countdown.py; then
