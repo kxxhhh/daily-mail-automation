@@ -9,6 +9,7 @@ import re
 import smtplib
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,7 +38,7 @@ MODEL_TIMEOUT = 480
 SUPPLEMENT_TIMEOUT = 6
 SUPPLEMENT_MAX_ITEMS = 12
 
-DEFAULT_MODEL = "glm-4.7-flash"
+DEFAULT_MODEL = "glm-4.7-flash,glm-4.5-flash,glm-4-flash-250414"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ENV_KEYS = (
     "SMTP_HOST",
@@ -314,51 +315,78 @@ def build_prompt(today, ancient_count, total_count, need_ancient, supplement="",
 
 
 def call_model(cfg, prompt):
-    """直接调用智谱 GLM OpenAI 兼容接口（open.bigmodel.cn），避免依赖 GitHub Actions 里的 opencode CLI。"""
+    """调用智谱 GLM OpenAI 兼容接口（open.bigmodel.cn）。
+    ZHIPU_MODEL 支持逗号分隔的降级链：前面的模型 429 过载/超时时自动切换下一个。"""
     base = cfg["ZHIPU_BASE_URL"].rstrip("/")
-    payload = {
-        "model": cfg["ZHIPU_MODEL"],
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 8192,
-        "temperature": 0.6,
-        # 关闭深度思考：默认开启时思考会耗尽 max_tokens，导致 finish_reason=length、正文为空
-        "thinking": {"type": "disabled"},
-    }
-    req = urllib.request.Request(
-        base + "/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {load_api_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    logging.info("调用智谱 GLM 生成素材")
-    try:
-        with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read()[:800].decode("utf-8", "replace")
-        raise RuntimeError(f"智谱 GLM HTTP {exc.code}：{detail}")
-    except Exception as exc:
-        raise RuntimeError(f"智谱 GLM 请求失败：{exc}")
+    models = [m.strip() for m in cfg["ZHIPU_MODEL"].split(",") if m.strip()] or [DEFAULT_MODEL]
+    last_error = None
+    for idx, model in enumerate(models):
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 8192,
+            "temperature": 0.6,
+            # 关闭深度思考：默认开启时思考会耗尽 max_tokens，导致 finish_reason=length、正文为空
+            "thinking": {"type": "disabled"},
+        }
+        req = urllib.request.Request(
+            base + "/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {load_api_key()}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        logging.info("调用智谱 GLM 生成素材（%d/%d：%s）", idx + 1, len(models), model)
+        try:
+            with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read()[:800].decode("utf-8", "replace")
+            last_error = RuntimeError(f"智谱 GLM HTTP {exc.code}（{model}）：{detail}")
+            logging.warning("%s", last_error)
+            if idx + 1 < len(models):
+                time.sleep(3)
+            continue
+        except Exception as exc:
+            last_error = RuntimeError(f"智谱 GLM 请求失败（{model}）：{exc}")
+            logging.warning("%s", last_error)
+            if idx + 1 < len(models):
+                time.sleep(3)
+            continue
 
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"智谱 GLM 返回非 JSON：{raw[:800]!r}")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            last_error = RuntimeError(f"智谱 GLM 返回非 JSON（{model}）：{raw[:800]!r}")
+            logging.warning("%s", last_error)
+            if idx + 1 < len(models):
+                time.sleep(3)
+            continue
 
-    choices = body.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"智谱 GLM 返回无 choices：{json.dumps(body, ensure_ascii=False)[:800]}")
-    message = choices[0].get("message") or {}
-    content = (message.get("content") or "").strip()
-    if not content:
+        choices = body.get("choices") or []
+        if not choices:
+            last_error = RuntimeError(
+                f"智谱 GLM 返回无 choices（{model}）：{json.dumps(body, ensure_ascii=False)[:800]}"
+            )
+            logging.warning("%s", last_error)
+            if idx + 1 < len(models):
+                time.sleep(3)
+            continue
+
+        message = choices[0].get("message") or {}
+        content = (message.get("content") or "").strip()
+        if content:
+            return content
         reason = (message.get("reasoning_content") or "")[:300]
-        raise RuntimeError(
+        last_error = RuntimeError(
             f"智谱 GLM 未返回正文（finish_reason={choices[0].get('finish_reason')}）：{reason}"
         )
-    return content
+        logging.warning("%s", last_error)
+        if idx + 1 < len(models):
+            time.sleep(3)
+    raise last_error or RuntimeError("智谱 GLM 所有模型均失败")
 
 
 def _unescape_json_text(value):
