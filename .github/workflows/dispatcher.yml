@@ -15,11 +15,15 @@ on:
   workflow_dispatch:
     inputs:
       force_essay:
-        description: "强制发送作文素材邮件（忽略闸门/时段，测试用）"
+        description: "立即发送作文邮件（时段闸门仍生效，不会重复）"
         type: boolean
         default: false
       force_gaokao:
-        description: "强制发送高考倒计时邮件（忽略闸门/时段，测试用）"
+        description: "立即发送高考倒计时邮件（时段闸门仍生效，不会重复）"
+        type: boolean
+        default: false
+      ignore_gate:
+        description: "连闸门也忽略（确认未收到邮件后的强制重发，可能重复！）"
         type: boolean
         default: false
   schedule:
@@ -48,6 +52,7 @@ jobs:
         env:
           FORCE_ESSAY: ${{ inputs.force_essay }}
           FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+          IGNORE_GATE: ${{ inputs.ignore_gate }}
         run: |
           # 第一段判定：纯标准库、不装依赖。非发送窗口（时段小时的 :20-:59 之外）直接跳过，
           # 省掉 pip install + 完整判定的开销（全天大部分 tick 走这里）。
@@ -56,7 +61,9 @@ jobs:
           from datetime import datetime, timedelta, timezone
           BJT = timezone(timedelta(hours=8))
           SEND_HOURS = {5, 8, 11, 14, 17, 20, 23}  # 含高考的 05 时
-          force = os.environ.get("FORCE_ESSAY") == "true" or os.environ.get("FORCE_GAOKAO") == "true"
+          force = (os.environ.get("FORCE_ESSAY") == "true"
+                   or os.environ.get("FORCE_GAOKAO") == "true"
+                   or os.environ.get("IGNORE_GATE") == "true")
           now = datetime.now(BJT)
           skip = not force and (now.hour not in SEND_HOURS or now.minute < 20)
           with open(os.environ["GITHUB_ENV"], "a") as ef:
@@ -76,6 +83,7 @@ jobs:
         env:
           FORCE_ESSAY: ${{ inputs.force_essay }}
           FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+          IGNORE_GATE: ${{ inputs.ignore_gate }}
         run: |
           python3 - <<'EOF'
           import json, os, time
@@ -86,6 +94,7 @@ jobs:
           GAOKAO_HOURS = {5}
           force_essay = os.environ.get("FORCE_ESSAY") == "true"
           force_gaokao = os.environ.get("FORCE_GAOKAO") == "true"
+          ignore_gate = os.environ.get("IGNORE_GATE") == "true"
 
           def gate_slot(name):
               try:
@@ -95,7 +104,7 @@ jobs:
                   return None
 
           now = datetime.now(BJT)
-          if not (force_essay or force_gaokao) and now.minute < 30:
+          if not (force_essay or force_gaokao or ignore_gate) and now.minute < 30:
               rem = (30 - now.minute) * 60 - now.second
               if 0 < rem <= 600:
                   print(f"北京时间 {now:%H:%M:%S}，等待 {rem} 秒到 :30 准点发送")
@@ -108,8 +117,9 @@ jobs:
                   raise SystemExit(0)
 
           slot = now.strftime("%Y-%m-%d %H")
-          due_essay = force_essay or (now.hour in ESSAY_HOURS and gate_slot("essay") != slot)
-          due_gaokao = force_gaokao or (now.hour in GAOKAO_HOURS and gate_slot("gaokao") != slot)
+          # force 仅跳过时段判定；闸门始终生效，除非显式 ignore_gate
+          due_essay = (force_essay or now.hour in ESSAY_HOURS) and (ignore_gate or gate_slot("essay") != slot)
+          due_gaokao = (force_gaokao or now.hour in GAOKAO_HOURS) and (ignore_gate or gate_slot("gaokao") != slot)
           print(f"北京时间 {now:%Y-%m-%d %H:%M} | due_essay={due_essay} | due_gaokao={due_gaokao}")
           with open(os.environ["GITHUB_ENV"], "a") as ef:
               ef.write(f"DUE_ESSAY={'true' if due_essay else 'false'}\n")
@@ -119,8 +129,7 @@ jobs:
       - name: Send due mails
         if: env.QUICK_SKIP != 'true'
         env:
-          FORCE_ESSAY: ${{ inputs.force_essay }}
-          FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+          IGNORE_GATE: ${{ inputs.ignore_gate }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SENDER: ${{ secrets.SENDER }}
@@ -130,8 +139,11 @@ jobs:
           STATE_DIR: ${{ github.workspace }}/state
         run: |
           ARGS_E=""; ARGS_G=""
-          [ "$FORCE_ESSAY" = "true" ] && ARGS_E="--force"
-          [ "$FORCE_GAOKAO" = "true" ] && ARGS_G="--force"
+          # 只有显式 ignore_gate 才绕过脚本内闸门；force_essay/gaokao 不传参数，闸门双重生效
+          if [ "$IGNORE_GATE" = "true" ]; then
+            ARGS_E="--ignore-gate"
+            ARGS_G="--ignore-gate"
+          fi
           FAILED=""
           if [ "$DUE_ESSAY" = "true" ]; then
             # 重试（指数退避）：模型 API 偶发 429/读超时；失败发生在发信前，重试不会重复发信

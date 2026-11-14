@@ -489,18 +489,22 @@ def send_mail(cfg, title, body):
 
 def main():
     setup_logging()
-    force = "--force" in sys.argv[1:]
+    args = sys.argv[1:]
+    # --force：绕过时间窗口（兼容旧用法，同时绕过闸门）
+    # --ignore-gate：仅绕过时段闸门（dispatcher 的 ignore_gate 输入使用）
+    force = "--force" in args
+    ignore_gate = "--ignore-gate" in args or force
 
     now = beijing_now()
     if not force and not (WINDOW_START <= now.time() <= WINDOW_END):
-        logging.info("当前北京时间 %s 不在 05:30-23:30 窗口内，退出", now.strftime("%H:%M"))
+        logging.info("当前北京时间 %s 不在 05:30-23:59 窗口内，退出", now.strftime("%H:%M"))
         return 0
 
     # 时段闸门（幂等）：同一北京时间小时只允许发一封。
     # 主触发（HH:20 触发、等到 HH:30 发送）成功后闸门生效；
     # 备份触发（HH:35 / HH:50，主触发丢失或失败时补发）命中闸门则直接跳过，绝不重复发送。
     slot = now.strftime("%Y-%m-%d %H")
-    if not force and GATE_FILE.is_file():
+    if not ignore_gate and GATE_FILE.is_file():
         try:
             gate = json.loads(GATE_FILE.read_text(encoding="utf-8"))
         except Exception:

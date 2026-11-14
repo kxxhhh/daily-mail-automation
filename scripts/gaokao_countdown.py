@@ -354,12 +354,14 @@ def send_mail(cfg, subject):
 
 def main():
     setup_logging()
-    force = "--force" in sys.argv[1:]
+    args = sys.argv[1:]
+    # --ignore-gate：绕过时段闸门（dispatcher 的 ignore_gate 输入使用）；--force 保持兼容，等效绕过
+    ignore_gate = "--ignore-gate" in args or "--force" in args
     try:
         now = datetime.now(timezone.utc).astimezone(BJT)
         # 时段闸门（幂等）：同一北京时间小时只发一封；备份触发命中闸门直接跳过
         slot = now.strftime("%Y-%m-%d %H")
-        if not force and GATE_FILE.is_file():
+        if not ignore_gate and GATE_FILE.is_file():
             try:
                 gate = json.loads(GATE_FILE.read_text(encoding="utf-8"))
             except Exception:
