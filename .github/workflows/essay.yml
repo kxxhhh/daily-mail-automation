@@ -1,11 +1,11 @@
 name: essay-mail
 
 on:
-  schedule:
-    # 北京时间 05:30 / 08:30 / 11:30 / 14:30 / 17:30 / 20:30 / 23:30
-    # GitHub Actions 使用 UTC，北京时间 = UTC+8
-    - cron: "30 0,3,6,9,12,15,21 * * *"
   workflow_dispatch:
+  # 说明：GitHub 原生 schedule 是 best-effort，常延迟数小时或丢失，
+  # 准点发送由本地 Termux cron 负责；此处仅保留手动触发作为备用。
+  # schedule:
+  #   - cron: "30 0,3,6,9,12,15,21 * * *"
 
 permissions:
   contents: write

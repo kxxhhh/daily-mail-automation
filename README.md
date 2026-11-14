@@ -17,16 +17,27 @@ state/essay_recent_people.json 近期人物去重历史
 .github/workflows/              GitHub Actions 定时任务
 ```
 
-## GitHub Actions 时间
+## 定时方式
 
-GitHub Actions 的 cron 使用 UTC：
+**准点发送由本地 Termux cron 负责**（见下方“本地运行”）。GitHub Actions 只保留手动 `workflow_dispatch` 作为备用。
 
-| 任务 | 北京时间 | UTC cron |
-|---|---|---|
-| 作文素材 | 05:30 / 08:30 / 11:30 / 14:30 / 17:30 / 20:30 / 23:30 | `30 0,3,6,9,12,15,21 * * *` |
-| 高考倒计时 | 每天 05:30 | `30 21 * * *` |
+原因：GitHub 原生 `schedule` 是 best-effort，高负载时可能延迟数小时甚至丢弃，无法保证“每天 05:30 准点”。
 
-> Actions 定时任务可能延迟几分钟；公开仓库若连续 60 天无提交，定时任务会被 GitHub 暂停，保持仓库有提交或手动运行一次即可恢复。
+备用手动触发（在仓库 Actions 页面点 Run workflow，或）：
+
+```bash
+gh workflow run essay.yml        --repo kxxhhh/daily-mail-automation
+gh workflow run gaokao.yml        --repo kxxhhh/daily-mail-automation
+```
+
+本地 crontab（北京时间 UTC+8）：
+
+```cron
+30 5-23/3 * * * python3 $HOME/scripts/essay_hourly.py >> $HOME/scripts/essay.log 2>&1
+30 5 * * *     python3 $HOME/scripts/gaokao_countdown.py >> $HOME/scripts/gaokao.log 2>&1
+```
+
+> 依赖 Termux 进程存活；需保持 `termux-wake-lock` 与电池优化“不受限制”。
 
 ## 必需的 Repository Secrets
 
