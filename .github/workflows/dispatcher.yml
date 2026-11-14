@@ -35,7 +35,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -44,10 +44,35 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Quick skip (stdlib only)
+        env:
+          FORCE_ESSAY: ${{ inputs.force_essay }}
+          FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+        run: |
+          # 第一段判定：纯标准库、不装依赖。非发送窗口（时段小时的 :20-:59 之外）直接跳过，
+          # 省掉 pip install + 完整判定的开销（全天大部分 tick 走这里）。
+          python3 - <<'EOF'
+          import os
+          from datetime import datetime, timedelta, timezone
+          BJT = timezone(timedelta(hours=8))
+          SEND_HOURS = {5, 8, 11, 14, 17, 20, 23}  # 含高考的 05 时
+          force = os.environ.get("FORCE_ESSAY") == "true" or os.environ.get("FORCE_GAOKAO") == "true"
+          now = datetime.now(BJT)
+          skip = not force and (now.hour not in SEND_HOURS or now.minute < 20)
+          with open(os.environ["GITHUB_ENV"], "a") as ef:
+              ef.write(f"QUICK_SKIP={'true' if skip else 'false'}\n")
+          if skip:
+              print(f"北京时间 {now:%H:%M} 非发送窗口，本 tick 快速跳过")
+          else:
+              print(f"北京时间 {now:%H:%M} 进入发送判定")
+          EOF
+
       - name: Install dependencies
+        if: env.QUICK_SKIP != 'true'
         run: pip install -r requirements.txt
 
       - name: Check due
+        if: env.QUICK_SKIP != 'true'
         env:
           FORCE_ESSAY: ${{ inputs.force_essay }}
           FORCE_GAOKAO: ${{ inputs.force_gaokao }}
@@ -92,6 +117,7 @@ jobs:
           EOF
 
       - name: Send due mails
+        if: env.QUICK_SKIP != 'true'
         env:
           FORCE_ESSAY: ${{ inputs.force_essay }}
           FORCE_GAOKAO: ${{ inputs.force_gaokao }}
@@ -136,7 +162,7 @@ jobs:
           fi
 
       - name: Persist state
-        if: always()
+        if: always() && env.QUICK_SKIP != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

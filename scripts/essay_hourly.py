@@ -34,7 +34,7 @@ RECENT_LIMIT = 40
 WINDOW_START = dtime(5, 30)
 WINDOW_END = dtime(23, 59)  # 23:30 时段的补发 tick 最晚可到 23:59
 TITLE_MAX = 110
-MODEL_TIMEOUT = 480
+MODEL_TIMEOUT = 300  # 实测 GLM 生成约 80-120 秒；单模型 5 分钟兜底，降级链共 3 个模型
 SUPPLEMENT_TIMEOUT = 6
 SUPPLEMENT_MAX_ITEMS = 12
 
@@ -347,7 +347,8 @@ def call_model(cfg, prompt):
             last_error = RuntimeError(f"智谱 GLM HTTP {exc.code}（{model}）：{detail}")
             logging.warning("%s", last_error)
             if idx + 1 < len(models):
-                time.sleep(3)
+                # 429 过载：稍等再切下一个模型，给服务端一点恢复时间
+                time.sleep(10 if exc.code == 429 else 3)
             continue
         except Exception as exc:
             last_error = RuntimeError(f"智谱 GLM 请求失败（{model}）：{exc}")
