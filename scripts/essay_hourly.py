@@ -32,7 +32,7 @@ GATE_FILE = STATE_DIR / "essay_slot_gate.json"
 RECENT_LIMIT = 40
 
 WINDOW_START = dtime(5, 30)
-WINDOW_END = dtime(23, 30)
+WINDOW_END = dtime(23, 59)  # 23:30 时段的补发 tick 最晚可到 23:59
 TITLE_MAX = 110
 MODEL_TIMEOUT = 480
 SUPPLEMENT_TIMEOUT = 6

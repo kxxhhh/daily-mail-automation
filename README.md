@@ -19,26 +19,27 @@ state/essay_recent_people.json 近期人物去重历史
 
 ## 定时方式
 
-**GitHub Actions 自愈式定时**（`schedule` 多触发 + 脚本时段闸门，另保留 `workflow_dispatch` 手动备用）。
+**GitHub Actions 巡检式调度器**（`dispatcher.yml` 每 5 分钟 tick + 脚本时段闸门），手动 `workflow_dispatch` 仅作备用/测试。
 
-GitHub 原生 `schedule` 是 best-effort，可能延迟数分钟、甚至偶发丢失。为做到“到点必达、绝不重复”，两个工作流采用同一套自愈模式：
+GitHub 原生 `schedule` 是 best-effort，实测会整段丢弃触发点（2026-11-14 北京 20:30 时段的三个触发点全部未创建 run）。因此不再把发送时间赌在某个 cron 点上，改为**高频巡检 + 到点判定**：
 
-| 触发时刻（UTC） | 作用 |
-|---|---|
-| HH:20 主触发 | 等待到北京时间 HH:30 精确发送（触发延迟只要 < 10 分钟，邮件仍准点） |
-| HH:35 备份 1 | 主触发丢失/失败时补发，最多延迟 5 分钟 |
-| HH:50 备份 2 | 前两次都丢时再补发，最多延迟 20 分钟 |
-
-防重复：脚本内有**时段闸门**（同一北京时间小时只发一封，状态写入 `state/` 并提交回仓库），备份触发命中闸门会直接跳过；`concurrency` 排队保证备份不会与主发送并行。`--force` / 手动输入 `force=true` 可绕过闸门（测试用）。
+- `dispatcher.yml` 每 5 分钟 tick 一次；tick 内计算北京时间，自行判断是否该发：
+  - tick 落在 **:20-:29** → 精确等到 :30 发送（准点）
+  - tick 落在 **:30-:59** 且闸门未命中 → 立即补发（最多晚 29 分钟）
+  - tick 落在 **:00-:19** → 跳过（后续 tick 处理）
+- 每个发送时段有 **8 个冗余 tick**，只要任意一个被调度到就能发出；单个/多个 tick 丢失会自动自愈。
+- **防重复**：脚本时段闸门（同一北京小时只发一封，状态写入 `state/` 并提交回仓库）+ `concurrency` 排队（后续 tick 用最新仓库状态判断）。
+- 发送任务：作文时段 = 北京 05/08/11/14/17/20/23 时的 :30；高考倒计时 = 北京每天 05:30。
+- 发送失败自动重试 3 次（指数退避）；失败时段的闸门不会写入，后续 tick 会继续重试到时段结束。
 
 保活：GitHub 会在仓库连续 60 天无提交后自动禁用定时工作流，`keepalive.yml` 每周自动打一个空提交（`[skip ci]`，不触发其他工作流）。
 
 手动触发（在仓库 Actions 页面点 Run workflow，或）：
 
 ```bash
-gh workflow run essay.yml     --repo kxxhhh/daily-mail-automation
-gh workflow run gaokao.yml    --repo kxxhhh/daily-mail-automation
-gh workflow run keepalive.yml --repo kxxhhh/daily-mail-automation
+gh workflow run dispatcher.yml --repo kxxhhh/daily-mail-automation
+gh workflow run essay.yml     --repo kxxhhh/daily-mail-automation   # 手动直接发作文
+gh workflow run gaokao.yml    --repo kxxhhh/daily-mail-automation   # 手动直接发倒计时
 # 测试时可在 Run workflow 页面勾选 force（绕过时段闸门）
 ```
 

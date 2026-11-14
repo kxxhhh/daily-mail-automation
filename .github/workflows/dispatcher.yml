@@ -1,0 +1,159 @@
+name: mail-dispatcher
+
+# 自愈式调度器：每 5 分钟 tick 一次，tick 内自行判断“现在是否该发”。
+# 相比把发送时间赌在某个 cron 触发点上，本方案每个时段有 8 个冗余 tick，
+# 只要任意一个 tick 被调度到（即使延迟），邮件就会发出；闸门保证不重复发送。
+#
+# 判定逻辑（北京时间）：
+#   - 作文时段：05/08/11/14/17/20/23 时的 :30（每天 7 封）
+#   - 高考倒计时：05 时的 :30（每天 1 封）
+#   - tick 落在 :20-:29 → 精确等到 :30 再发（准点）
+#   - tick 落在 :30-:59 且闸门未命中 → 立即补发（最多晚 29 分钟）
+#   - tick 落在 :00-:19 → 本 tick 跳过（后续 tick 会处理）
+#   - 时段闸门（state/*_slot_gate.json，随仓库提交）保证同一时段只发一封
+on:
+  workflow_dispatch:
+    inputs:
+      force_essay:
+        description: "强制发送作文素材邮件（忽略闸门/时段，测试用）"
+        type: boolean
+        default: false
+      force_gaokao:
+        description: "强制发送高考倒计时邮件（忽略闸门/时段，测试用）"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mail-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check due
+        env:
+          FORCE_ESSAY: ${{ inputs.force_essay }}
+          FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, time
+          from datetime import datetime, timedelta, timezone
+
+          BJT = timezone(timedelta(hours=8))
+          ESSAY_HOURS = {5, 8, 11, 14, 17, 20, 23}
+          GAOKAO_HOURS = {5}
+          force_essay = os.environ.get("FORCE_ESSAY") == "true"
+          force_gaokao = os.environ.get("FORCE_GAOKAO") == "true"
+
+          def gate_slot(name):
+              try:
+                  with open(os.path.join("state", f"{name}_slot_gate.json"), encoding="utf-8") as fh:
+                      return json.load(fh).get("slot")
+              except Exception:
+                  return None
+
+          now = datetime.now(BJT)
+          if not (force_essay or force_gaokao) and now.minute < 30:
+              rem = (30 - now.minute) * 60 - now.second
+              if 0 < rem <= 600:
+                  print(f"北京时间 {now:%H:%M:%S}，等待 {rem} 秒到 :30 准点发送")
+                  time.sleep(rem)
+                  now = datetime.now(BJT)
+              else:
+                  print(f"北京时间 {now:%H:%M:%S}，距 :30 超过 10 分钟，本 tick 跳过（后续 tick 处理）")
+                  with open(os.environ["GITHUB_ENV"], "a") as ef:
+                      ef.write("DUE_ESSAY=false\nDUE_GAOKAO=false\n")
+                  raise SystemExit(0)
+
+          slot = now.strftime("%Y-%m-%d %H")
+          due_essay = force_essay or (now.hour in ESSAY_HOURS and gate_slot("essay") != slot)
+          due_gaokao = force_gaokao or (now.hour in GAOKAO_HOURS and gate_slot("gaokao") != slot)
+          print(f"北京时间 {now:%Y-%m-%d %H:%M} | due_essay={due_essay} | due_gaokao={due_gaokao}")
+          with open(os.environ["GITHUB_ENV"], "a") as ef:
+              ef.write(f"DUE_ESSAY={'true' if due_essay else 'false'}\n")
+              ef.write(f"DUE_GAOKAO={'true' if due_gaokao else 'false'}\n")
+          EOF
+
+      - name: Send due mails
+        env:
+          FORCE_ESSAY: ${{ inputs.force_essay }}
+          FORCE_GAOKAO: ${{ inputs.force_gaokao }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SENDER: ${{ secrets.SENDER }}
+          AUTH_CODE: ${{ secrets.AUTH_CODE }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          STATE_DIR: ${{ github.workspace }}/state
+        run: |
+          ARGS_E=""; ARGS_G=""
+          [ "$FORCE_ESSAY" = "true" ] && ARGS_E="--force"
+          [ "$FORCE_GAOKAO" = "true" ] && ARGS_G="--force"
+          FAILED=""
+          if [ "$DUE_ESSAY" = "true" ]; then
+            # 重试（指数退避）：模型 API 偶发 429/读超时；失败发生在发信前，重试不会重复发信
+            for i in 1 2 3; do
+              echo "=== essay 第 $i/3 次尝试 ==="
+              if python scripts/essay_hourly.py $ARGS_E; then break; fi
+              if [ "$i" -lt 3 ]; then
+                sleep $((i * 45))
+              else
+                FAILED="$FAILED essay"
+              fi
+            done
+          fi
+          if [ "$DUE_GAOKAO" = "true" ]; then
+            for i in 1 2 3; do
+              echo "=== gaokao 第 $i/3 次尝试 ==="
+              if python scripts/gaokao_countdown.py $ARGS_G; then break; fi
+              if [ "$i" -lt 3 ]; then
+                sleep $((i * 45))
+              else
+                FAILED="$FAILED gaokao"
+              fi
+            done
+          fi
+          if [ -n "$FAILED" ]; then
+            echo "发送失败的任务:$FAILED"
+            exit 1
+          fi
+
+      - name: Persist state
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state
+          if git diff --cached --quiet; then
+            echo "状态无变化"
+            exit 0
+          fi
+          git commit -m "chore: update mail state [skip ci]"
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "push 失败，拉取远端后重试（第 $i 次）"
+            git pull --rebase -X theirs origin master || git reset --hard origin/master
+            git add state
+            git diff --cached --quiet && { echo "远端已包含相同状态"; exit 0; }
+            git commit -m "chore: update mail state [skip ci]" || true
+            sleep 5
+          done
+          echo "push 连续 3 次失败"
+          exit 1

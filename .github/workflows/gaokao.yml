@@ -7,12 +7,8 @@ on:
         description: "忽略时段闸门，强制发送（测试用）"
         type: boolean
         default: false
-  # 北京时间每天 05:30（UTC 21:30）。
-  # 自愈式定时：UTC 21:20 主触发（等待到 05:30 准点发送）；21:35 / 21:50 为备份触发，
-  # 仅当主触发丢失或失败时补发。脚本内有时段闸门（同一北京小时只发一封），
-  # 备份触发命中闸门会直接跳过，不会重复发送。
-  schedule:
-    - cron: "20,35,50 21 * * *"
+  # 定时发送由 mail-dispatcher.yml 每 5 分钟巡检触发（自愈式，见该文件说明）。
+  # 本文件仅保留手动触发作为备用/测试入口。
 
 permissions:
   contents: write
@@ -35,23 +31,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Wait until slot (Beijing HH:30)
-        run: |
-          # 计算距下一个整点 ：30 的秒数并等待（最长 13 分钟）；已过 ：30 则直接发送
-          python3 - <<'EOF'
-          import time
-          now = time.time()
-          gm = time.gmtime(now)
-          if gm.tm_min < 30:
-              target = now + (29 - gm.tm_min) * 60 + (60 - gm.tm_sec)
-              sleep_s = min(int(target - now), 780)
-              if sleep_s > 0:
-                  print(f"等待 {sleep_s} 秒后准点发送")
-                  time.sleep(sleep_s)
-          else:
-              print("已过 ：30，立即发送")
-          EOF
 
       - name: Send countdown
         env:
