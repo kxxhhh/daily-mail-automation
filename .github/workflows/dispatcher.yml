@@ -195,3 +195,38 @@ jobs:
           done
           echo "push 连续 3 次失败"
           exit 1
+
+      - name: Chain next tick
+        # 自链式调度：schedule 事件在本仓库实测不触发（2026-11-14 观察 2h45m 零注册），
+        # 改为每次运行收尾时休眠到下一个 5 分钟刻度、再用 DISPATCH_TOKEN 触发下一次运行。
+        # on.schedule 保留作为备用种子：若它哪天恢复工作，也只会触发额外 tick，
+        # 闸门保证不重复发送，链式步骤会因排队数 >=2 自动不再补种。
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          # 已有 >=2 个 dispatcher 运行在排队/执行中 → 链路健康，不重复补种
+          PENDING=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?per_page=20" \
+            | python3 -c "import json,sys; rs=json.load(sys.stdin)['workflow_runs']; print(sum(1 for r in rs if r['name']=='mail-dispatcher' and r['status']!='completed'))")
+          if [ "${PENDING:-0}" -ge 2 ]; then
+            echo "链路健康（${PENDING} 个运行未完成），本次不补种"
+            exit 0
+          fi
+          WAIT=$(( 300 - $(date +%s) % 300 + 10 ))
+          echo "等待 ${WAIT}s 后触发下一次 tick（当前未完成 ${PENDING} 个）"
+          sleep "$WAIT"
+          for i in 1 2 3; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/dispatcher.yml/dispatches" \
+              -d '{"ref":"master"}')
+            echo "dispatch HTTP $CODE"
+            if [ "$CODE" = "204" ]; then
+              echo "链路：下一次 tick 已触发"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "ERROR: 链式触发连续失败，链路将在本次运行后中断（需手动 Run workflow 重新播种）"
+          exit 1
