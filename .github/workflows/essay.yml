@@ -2,10 +2,13 @@ name: essay-mail
 
 on:
   workflow_dispatch:
-  # 说明：GitHub 原生 schedule 是 best-effort，常延迟数小时或丢失，
-  # 准点发送由本地 Termux cron 负责；此处仅保留手动触发作为备用。
-  # schedule:
-  #   - cron: "30 0,3,6,9,12,15,21 * * *"
+  # 北京时间 05:30 / 08:30 / 11:30 / 14:30 / 17:30 / 20:30 / 23:30
+  # （对应 UTC 21:30(前一日) / 00:30 / 03:30 / 06:30 / 09:30 / 12:30 / 15:30）
+  # GitHub 原生 schedule 是 best-effort，可能延迟数分钟到数十分钟。
+  # 因此提前 10 分钟触发，再由下方“Wait until slot”步骤精确等到 ：30 准点发送；
+  # 若触发时已过 ：30，则立即发送，不额外等待。
+  schedule:
+    - cron: "20 0,3,6,9,12,15,21 * * *"
 
 permissions:
   contents: write
@@ -17,7 +20,7 @@ concurrency:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +31,24 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Wait until slot (Beijing HH:30)
+        run: |
+          # 计算距下一个整点 ：30 的秒数并等待（最长 13 分钟）；已过 ：30 则直接发送
+          python3 - <<'EOF'
+          import time
+          now = time.time()
+          gm = time.gmtime(now)
+          if gm.tm_min < 30:
+              # 对齐到本小时 :30（UTC 与北京目标时间均为整点后 30 分钟）
+              target = now + (29 - gm.tm_min) * 60 + (60 - gm.tm_sec)
+              sleep_s = min(int(target - now), 780)
+              if sleep_s > 0:
+                  print(f"等待 {sleep_s} 秒后准点发送")
+                  time.sleep(sleep_s)
+          else:
+              print("已过 ：30，立即发送")
+          EOF
 
       - name: Generate and send
         env:

@@ -14,30 +14,33 @@ scripts/essay_hourly.py        作文素材邮件
 scripts/gaokao_countdown.py    高考倒计时邮件
 state/essay_weekly_state.json  本周古代人物比例状态
 state/essay_recent_people.json 近期人物去重历史
-.github/workflows/              GitHub Actions 定时任务
+.github/workflows/              GitHub Actions 定时任务（含 keepalive 保活）
 ```
 
 ## 定时方式
 
-**准点发送由本地 Termux cron 负责**（见下方“本地运行”）。GitHub Actions 只保留手动 `workflow_dispatch` 作为备用。
+**准点发送已迁移到 GitHub Actions 定时任务**（`schedule` + `workflow_dispatch` 手动备用）。
 
-原因：GitHub 原生 `schedule` 是 best-effort，高负载时可能延迟数小时甚至丢弃，无法保证“每天 05:30 准点”。
+原因与做法：GitHub 原生 `schedule` 是 best-effort，可能延迟数分钟到数十分钟，无法直接保证“北京 05:30 准点”。因此两个工作流都**提前 10 分钟触发，再在 workflow 内精确等到 ：30 准点发送**；若触发时已过 ：30，则立即发送，不会叠加延迟。脚本用当前时间生成内容，因此即便偶发较大延迟也能正常发出。
 
-备用手动触发（在仓库 Actions 页面点 Run workflow，或）：
+另外 GitHub 会在仓库连续 60 天无提交后自动禁用定时工作流，`keepalive.yml` 每周自动打一个空提交保活（`[skip ci]`，不触发其他工作流）。
+
+手动触发（在仓库 Actions 页面点 Run workflow，或）：
 
 ```bash
-gh workflow run essay.yml        --repo kxxhhh/daily-mail-automation
-gh workflow run gaokao.yml        --repo kxxhhh/daily-mail-automation
+gh workflow run essay.yml     --repo kxxhhh/daily-mail-automation
+gh workflow run gaokao.yml    --repo kxxhhh/daily-mail-automation
+gh workflow run keepalive.yml --repo kxxhhh/daily-mail-automation
 ```
 
-本地 crontab（北京时间 UTC+8）：
+可选：本地 Termux cron 仍可继续作为备份（北京时间 UTC+8）：
 
 ```cron
 30 5-23/3 * * * python3 $HOME/scripts/essay_hourly.py >> $HOME/scripts/essay.log 2>&1
 30 5 * * *     python3 $HOME/scripts/gaokao_countdown.py >> $HOME/scripts/gaokao.log 2>&1
 ```
 
-> 依赖 Termux 进程存活；需保持 `termux-wake-lock` 与电池优化“不受限制”。
+> 本地备份依赖 Termux 进程存活；需保持 `termux-wake-lock` 与电池优化“不受限制”。
 
 ## 必需的 Repository Secrets
 

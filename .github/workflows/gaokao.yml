@@ -2,10 +2,11 @@ name: gaokao-countdown
 
 on:
   workflow_dispatch:
-  # 说明：GitHub 原生 schedule 是 best-effort，常延迟数小时或丢失，
-  # 准点发送由本地 Termux cron 负责；此处仅保留手动触发作为备用。
-  # schedule:
-  #   - cron: "30 21 * * *"
+  # 北京时间每天 05:30（UTC 21:30）
+  # 提前 10 分钟触发，再由“Wait until slot”步骤精确等到 ：30 准点发送；
+  # 若触发时已过 ：30，则立即发送，不额外等待。
+  schedule:
+    - cron: "20 21 * * *"
 
 permissions:
   contents: read
@@ -17,7 +18,7 @@ concurrency:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +29,23 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Wait until slot (Beijing HH:30)
+        run: |
+          # 计算距下一个整点 ：30 的秒数并等待（最长 13 分钟）；已过 ：30 则直接发送
+          python3 - <<'EOF'
+          import time
+          now = time.time()
+          gm = time.gmtime(now)
+          if gm.tm_min < 30:
+              target = now + (29 - gm.tm_min) * 60 + (60 - gm.tm_sec)
+              sleep_s = min(int(target - now), 780)
+              if sleep_s > 0:
+                  print(f"等待 {sleep_s} 秒后准点发送")
+                  time.sleep(sleep_s)
+          else:
+              print("已过 ：30，立即发送")
+          EOF
 
       - name: Send countdown
         env:
