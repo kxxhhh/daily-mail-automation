@@ -19,11 +19,19 @@ state/essay_recent_people.json 近期人物去重历史
 
 ## 定时方式
 
-**准点发送已迁移到 GitHub Actions 定时任务**（`schedule` + `workflow_dispatch` 手动备用）。
+**GitHub Actions 自愈式定时**（`schedule` 多触发 + 脚本时段闸门，另保留 `workflow_dispatch` 手动备用）。
 
-原因与做法：GitHub 原生 `schedule` 是 best-effort，可能延迟数分钟到数十分钟，无法直接保证“北京 05:30 准点”。因此两个工作流都**提前 10 分钟触发，再在 workflow 内精确等到 ：30 准点发送**；若触发时已过 ：30，则立即发送，不会叠加延迟。脚本用当前时间生成内容，因此即便偶发较大延迟也能正常发出。
+GitHub 原生 `schedule` 是 best-effort，可能延迟数分钟、甚至偶发丢失。为做到“到点必达、绝不重复”，两个工作流采用同一套自愈模式：
 
-另外 GitHub 会在仓库连续 60 天无提交后自动禁用定时工作流，`keepalive.yml` 每周自动打一个空提交保活（`[skip ci]`，不触发其他工作流）。
+| 触发时刻（UTC） | 作用 |
+|---|---|
+| HH:20 主触发 | 等待到北京时间 HH:30 精确发送（触发延迟只要 < 10 分钟，邮件仍准点） |
+| HH:35 备份 1 | 主触发丢失/失败时补发，最多延迟 5 分钟 |
+| HH:50 备份 2 | 前两次都丢时再补发，最多延迟 20 分钟 |
+
+防重复：脚本内有**时段闸门**（同一北京时间小时只发一封，状态写入 `state/` 并提交回仓库），备份触发命中闸门会直接跳过；`concurrency` 排队保证备份不会与主发送并行。`--force` / 手动输入 `force=true` 可绕过闸门（测试用）。
+
+保活：GitHub 会在仓库连续 60 天无提交后自动禁用定时工作流，`keepalive.yml` 每周自动打一个空提交（`[skip ci]`，不触发其他工作流）。
 
 手动触发（在仓库 Actions 页面点 Run workflow，或）：
 
@@ -31,6 +39,7 @@ state/essay_recent_people.json 近期人物去重历史
 gh workflow run essay.yml     --repo kxxhhh/daily-mail-automation
 gh workflow run gaokao.yml    --repo kxxhhh/daily-mail-automation
 gh workflow run keepalive.yml --repo kxxhhh/daily-mail-automation
+# 测试时可在 Run workflow 页面勾选 force（绕过时段闸门）
 ```
 
 可选：本地 Termux cron 仍可继续作为备份（北京时间 UTC+8）：

@@ -27,6 +27,7 @@ LOG_FILE = SCRIPT_DIR / "essay.log"
 STATE_DIR = Path(os.environ.get("STATE_DIR", str(HOME / ".cache")))
 STATE_FILE = STATE_DIR / "essay_weekly_state.json"
 RECENT_FILE = STATE_DIR / "essay_recent_people.json"
+GATE_FILE = STATE_DIR / "essay_slot_gate.json"
 RECENT_LIMIT = 40
 
 WINDOW_START = dtime(5, 30)
@@ -318,8 +319,10 @@ def call_model(cfg, prompt):
     payload = {
         "model": cfg["ZHIPU_MODEL"],
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "temperature": 0.6,
+        # 关闭深度思考：默认开启时思考会耗尽 max_tokens，导致 finish_reason=length、正文为空
+        "thinking": {"type": "disabled"},
     }
     req = urllib.request.Request(
         base + "/chat/completions",
@@ -464,6 +467,19 @@ def main():
         logging.info("当前北京时间 %s 不在 05:30-23:30 窗口内，退出", now.strftime("%H:%M"))
         return 0
 
+    # 时段闸门（幂等）：同一北京时间小时只允许发一封。
+    # 主触发（HH:20 触发、等到 HH:30 发送）成功后闸门生效；
+    # 备份触发（HH:35 / HH:50，主触发丢失或失败时补发）命中闸门则直接跳过，绝不重复发送。
+    slot = now.strftime("%Y-%m-%d %H")
+    if not force and GATE_FILE.is_file():
+        try:
+            gate = json.loads(GATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            gate = {}
+        if gate.get("slot") == slot:
+            logging.info("时段闸门：本时段（北京 %s 时）已发送，跳过", slot)
+            return 0
+
     try:
         cfg = load_env()
         today = now.date()
@@ -526,6 +542,15 @@ def main():
         logging.info("生成完成：标题=%s；ancient_count=%s；total_people=%s", title, ancient, total)
         send_mail(cfg, title, data["body"])
         logging.info("邮件发送成功")
+
+        # 发送成功即写闸门：后续备份触发会跳过，避免重复发送
+        try:
+            GATE_FILE.write_text(
+                json.dumps({"slot": slot, "sent_at": now.isoformat()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as gate_exc:
+            logging.warning("写入时段闸门失败：%s", gate_exc)
 
         state["ancient_count"] = ancient_count + ancient
         state["total_count"] = total_count + total

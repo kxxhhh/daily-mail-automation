@@ -2,13 +2,19 @@ name: essay-mail
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "忽略时段闸门与时间窗口，强制发送（测试用）"
+        type: boolean
+        default: false
   # 北京时间 05:30 / 08:30 / 11:30 / 14:30 / 17:30 / 20:30 / 23:30
   # （对应 UTC 21:30(前一日) / 00:30 / 03:30 / 06:30 / 09:30 / 12:30 / 15:30）
-  # GitHub 原生 schedule 是 best-effort，可能延迟数分钟到数十分钟。
-  # 因此提前 10 分钟触发，再由下方“Wait until slot”步骤精确等到 ：30 准点发送；
-  # 若触发时已过 ：30，则立即发送，不额外等待。
+  # 自愈式定时：HH:20 主触发（等待到 HH:30 准点发送）；HH:35 / HH:50 为备份触发，
+  # 仅当主触发丢失或失败时补发（延迟 5 / 20 分钟）。
+  # 脚本内有时段闸门（同一北京小时只发一封），备份触发命中闸门会直接跳过，
+  # 因此多触发不会重复发送。闸门状态随 state/ 提交回仓库，跨运行可见。
   schedule:
-    - cron: "20 0,3,6,9,12,15,21 * * *"
+    - cron: "20,35,50 0,3,6,9,12,15,21 * * *"
 
 permissions:
   contents: write
@@ -61,14 +67,19 @@ jobs:
           ZHIPU_MODEL: glm-4.7-flash
           STATE_DIR: ${{ github.workspace }}/state
         run: |
-          # 自动重试：模型 API 偶发读超时（LongCat 实测过），最多尝试 3 次；失败基本发生在发信前，重试不会重复发信
+          ARGS=""
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="--force"; fi
+          # 自动重试（指数退避）：模型 API 偶发 429/读超时，最多尝试 3 次；失败发生在发信前，重试不会重复发信
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
-            if python scripts/essay_hourly.py --force; then
+            if python scripts/essay_hourly.py $ARGS; then
               exit 0
             fi
-            echo "第 $i 次失败，30 秒后重试"
-            sleep 30
+            if [ "$i" -lt 3 ]; then
+              WAIT=$((i * 45))
+              echo "第 $i 次失败，${WAIT} 秒后重试"
+              sleep $WAIT
+            fi
           done
           echo "连续 3 次失败，放弃"
           exit 1

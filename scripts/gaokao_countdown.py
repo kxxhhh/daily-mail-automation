@@ -7,6 +7,7 @@
   - 生日提醒（本人 4/28、父亲 2/13、母亲农历 07/04）
 """
 
+import json
 import logging
 import os
 import re
@@ -28,6 +29,8 @@ except Exception:  # pragma: no cover
 BJT = timezone(timedelta(hours=8))
 SCRIPT_DIR = Path(__file__).resolve().parent
 ENV_FILE = SCRIPT_DIR / "essay.env"
+STATE_DIR = Path(os.environ.get("STATE_DIR", str(SCRIPT_DIR)))
+GATE_FILE = STATE_DIR / "gaokao_slot_gate.json"
 LOG_FILE = SCRIPT_DIR / "gaokao.log"
 EXAM_DATE = date(2027, 6, 7)
 
@@ -351,12 +354,30 @@ def send_mail(cfg, subject):
 
 def main():
     setup_logging()
+    force = "--force" in sys.argv[1:]
     try:
-        cfg = load_env()
         now = datetime.now(timezone.utc).astimezone(BJT)
+        # 时段闸门（幂等）：同一北京时间小时只发一封；备份触发命中闸门直接跳过
+        slot = now.strftime("%Y-%m-%d %H")
+        if not force and GATE_FILE.is_file():
+            try:
+                gate = json.loads(GATE_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                gate = {}
+            if gate.get("slot") == slot:
+                logging.info("时段闸门：本时段（北京 %s 时）已发送，跳过", slot)
+                return 0
+        cfg = load_env()
         subject = build_subject(now, fetch_hot_topic())
         send_mail(cfg, subject)
         logging.info("倒计时邮件发送成功（%s 字符）：%s", len(subject), subject)
+        try:
+            GATE_FILE.write_text(
+                json.dumps({"slot": slot, "sent_at": now.isoformat()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as gate_exc:
+            logging.warning("写入时段闸门失败：%s", gate_exc)
         print(f"OK: {subject}")
         return 0
     except Exception as exc:

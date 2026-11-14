@@ -2,14 +2,20 @@ name: gaokao-countdown
 
 on:
   workflow_dispatch:
-  # 北京时间每天 05:30（UTC 21:30）
-  # 提前 10 分钟触发，再由“Wait until slot”步骤精确等到 ：30 准点发送；
-  # 若触发时已过 ：30，则立即发送，不额外等待。
+    inputs:
+      force:
+        description: "忽略时段闸门，强制发送（测试用）"
+        type: boolean
+        default: false
+  # 北京时间每天 05:30（UTC 21:30）。
+  # 自愈式定时：UTC 21:20 主触发（等待到 05:30 准点发送）；21:35 / 21:50 为备份触发，
+  # 仅当主触发丢失或失败时补发。脚本内有时段闸门（同一北京小时只发一封），
+  # 备份触发命中闸门会直接跳过，不会重复发送。
   schedule:
-    - cron: "20 21 * * *"
+    - cron: "20,35,50 21 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: gaokao-countdown
@@ -54,15 +60,33 @@ jobs:
           SENDER: ${{ secrets.SENDER }}
           AUTH_CODE: ${{ secrets.AUTH_CODE }}
           RECEIVER: ${{ secrets.RECEIVER }}
+          STATE_DIR: ${{ github.workspace }}/state
         run: |
-          # 自动重试：网络/上游偶发超时，最多尝试 3 次（发送失败基本发生在发信前，重试不会重复发信）
+          ARGS=""
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="--force"; fi
+          # 自动重试（指数退避）：网络/上游偶发 429/超时，最多尝试 3 次（发送失败发生在发信前，重试不会重复发信）
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
-            if python scripts/gaokao_countdown.py; then
+            if python scripts/gaokao_countdown.py $ARGS; then
               exit 0
             fi
-            echo "第 $i 次失败，30 秒后重试"
-            sleep 30
+            if [ "$i" -lt 3 ]; then
+              WAIT=$((i * 45))
+              echo "第 $i 次失败，${WAIT} 秒后重试"
+              sleep $WAIT
+            fi
           done
           echo "连续 3 次失败，放弃"
           exit 1
+
+      - name: Persist state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state
+          if git diff --cached --quiet; then
+            echo "状态无变化"
+          else
+            git commit -m "chore: update gaokao gate [skip ci]"
+            git push
+          fi
