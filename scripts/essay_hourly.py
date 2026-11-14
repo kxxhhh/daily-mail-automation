@@ -32,7 +32,7 @@ RECENT_LIMIT = 40
 WINDOW_START = dtime(5, 30)
 WINDOW_END = dtime(23, 30)
 TITLE_MAX = 110
-MODEL_TIMEOUT = 240
+MODEL_TIMEOUT = 480
 SUPPLEMENT_TIMEOUT = 6
 SUPPLEMENT_MAX_ITEMS = 12
 
@@ -289,9 +289,9 @@ def build_prompt(today, ancient_count, total_count, need_ancient, supplement="",
 - 不要写任何事件素材、时事新闻或独立事件段落，全篇只围绕这一个人物展开。
 
 标题规则（核心）：
-- 格式：人物姓名·钩子词＋关键事迹/数字（不要写日期，标题必须以人物姓名开头，只写这一个人物，不要加入事件关键词）
-- 全标题 ≤110 个字符，最关键信息放最前。
-- 标题长度尽量写到 90-110 字：写清人物的核心反差与关键事迹/数字，不要压缩成短标签。
+- 格式：人物姓名·钩子词＋身份/时代＋2-3 个具体事迹或数字＋一句原话/评价（不要写日期，标题必须以人物姓名开头，只写这一个人物，不要加入事件关键词）
+- 全标题必须为 90-110 个字符：少于 90 字视为不合格，不得用“等等”“诸多”或省略号凑长度。
+- 标题要写成信息密集的完整长句，不要压缩成短标签；最关键信息放最前。
 - 钩子词 = 该人物最具反差感的一个细节。
 - 标题必须独立承载当日核心信息，让手环不打开邮件就知道今天推了什么、不值得点开细看。
 - 正文可以详细，标题要在此额度内承载足够信息，不要只写短标签。
@@ -318,9 +318,9 @@ def call_model(cfg, prompt):
     payload = {
         "model": cfg["LONGCAT_MODEL"],
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 8192,
+        "max_tokens": 32768,
         "temperature": 0.6,
-        "reasoning_effort": "none",
+        "thinking": {"type": "enabled"},
     }
     req = urllib.request.Request(
         base + "/chat/completions",
@@ -359,15 +359,42 @@ def call_model(cfg, prompt):
     return content
 
 
+def _unescape_json_text(value):
+    def repl(match):
+        char = match.group(1)
+        return {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\", "/": "/"}.get(
+            char, char
+        )
+
+    return re.sub(r"\\(.)", repl, value, flags=re.S)
+
+
 def extract_json(stdout):
     start = stdout.find("{")
     end = stdout.rfind("}")
     if start == -1 or end < start:
         raise RuntimeError(f"模型输出中找不到 JSON；输出尾部：{stdout[-1500:]}")
+    raw = stdout[start : end + 1]
     try:
-        return json.loads(stdout[start : end + 1])
+        return json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"JSON 解析失败：{exc}；内容片段：{stdout[start:end+1][:800]}")
+        # 模型常在字符串内直接使用未转义的英文双引号；按字段锚点做一次容错解析
+        pattern = re.compile(
+            r'"title"\s*:\s*"(?P<title>.*?)"\s*,\s*"body"\s*:\s*"(?P<body>.*)"'
+            r'\s*,\s*"ancient_count"\s*:\s*(?P<ancient>\d+)'
+            r'\s*,\s*"total_people"\s*:\s*(?P<total>\d+)',
+            re.S,
+        )
+        match = pattern.search(raw)
+        if not match:
+            raise RuntimeError(f"JSON 解析失败：{exc}；内容片段：{raw[:800]}")
+        logging.warning("模型 JSON 存在未转义引号，已使用容错解析")
+        return {
+            "title": _unescape_json_text(match.group("title")),
+            "body": _unescape_json_text(match.group("body")),
+            "ancient_count": int(match.group("ancient")),
+            "total_people": int(match.group("total")),
+        }
 
 
 def validate(data, need_ancient):
@@ -383,6 +410,21 @@ def validate(data, need_ancient):
         raise RuntimeError("title 为空或不是字符串")
     if not isinstance(data["body"], str) or not data["body"].strip():
         raise RuntimeError("body 为空或不是字符串")
+
+    title_text = data["title"].strip()
+    body_text = data["body"].strip()
+    if not re.match(r"^[\u4e00-\u9fa5]{2,5}[·・]", title_text):
+        raise RuntimeError(f"title 未以“人物姓名·”开头：{title_text[:40]}")
+    if len(title_text) < 90:
+        raise RuntimeError(f"title 过短（{len(title_text)} 字），要求 90-110 字")
+    if len(body_text) < 200:
+        raise RuntimeError(f"body 过短（{len(body_text)} 字），可能被截断")
+    missing_sections = [name for name in ("适用主题", "运用示范") if name not in body_text]
+    if missing_sections:
+        raise RuntimeError(f"body 缺少字段：{'、'.join(missing_sections)}")
+    if not body_text.endswith(("。", "！", "？", "…", "”", "」", "』", "）", "】")):
+        raise RuntimeError(f"body 结尾不完整：{body_text[-30:]}")
+
     if ancient < 0 or total < 0:
         raise RuntimeError("ancient_count / total_people 不能为负数")
     if ancient < need_ancient:
@@ -454,9 +496,10 @@ def main():
             load_recent_people(),
         )
         retry_note = (
-            "\n\n上次输出不是合法 JSON（常见原因：字符串内出现未转义的英文双引号，"
-            "或缺少 ancient_count/total_people 字段）。请严格只输出一个合法 JSON 对象，"
-            "字符串内引用一律使用中文引号“”，不要输出任何其他文字。"
+            "\n\n上次输出不合格（常见原因：JSON 字符串内出现未转义的英文双引号、"
+            "缺少 ancient_count/total_people 字段、标题不足 90 字，或正文缺少“适用主题/运用示范”）。"
+            "请严格只输出一个合法 JSON 对象；标题必须以人物姓名·开头且为 90-110 字；"
+            "正文必须完整并以中文句号结尾；字符串内引用一律使用中文引号“”，不要输出任何其他文字。"
         )
         data = None
         last_error = None
