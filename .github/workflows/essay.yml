@@ -24,12 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      # 不用 setup-python：脚本纯标准库 + lunardate，系统 python3 足够
+      #（2026-11-15 新 runner 镜像上 setup-python 缓存步骤曾导致全部失败）
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python3 -m pip install --quiet -r requirements.txt
 
       - name: Generate and send
         env:
@@ -47,7 +45,7 @@ jobs:
           # 自动重试（指数退避）：模型 API 偶发 429/读超时，最多尝试 3 次；失败发生在发信前，重试不会重复发信
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
-            if python scripts/essay_hourly.py $ARGS; then
+            if python3 scripts/essay_hourly.py $ARGS; then
               exit 0
             fi
             if [ "$i" -lt 3 ]; then

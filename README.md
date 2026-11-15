@@ -19,19 +19,21 @@ state/essay_recent_people.json 近期人物去重历史
 
 ## 定时方式
 
-**GitHub Actions 巡检式调度器**（`dispatcher.yml` 每 5 分钟 tick + 脚本时段闸门），手动 `workflow_dispatch` 仅作备用/测试。
+**GitHub Actions 自链式巡检调度**（`dispatcher.yml` 每 5 分钟 tick + 脚本时段闸门），手动 `workflow_dispatch` 仅作播种/测试。
 
-GitHub 原生 `schedule` 是 best-effort，实测会整段丢弃触发点（2026-11-14 北京 20:30 时段的三个触发点全部未创建 run）。因此不再把发送时间赌在某个 cron 点上，改为**高频巡检 + 到点判定**：
+GitHub 原生 `schedule` 在本仓库实测**完全不触发**（2026-11-14 观察 2h45m 零注册；2026-11-15 全天依旧），因此调度不依赖它：
 
-- `dispatcher.yml` 每 5 分钟 tick 一次，两段式判定（非发送窗口的 tick 用纯标准库快速跳过，不装依赖）：
+- **自链式**：每次 dispatcher 运行收尾（`Chain next tick` 步骤，`if: always()`，即使本次失败也会执行）休眠到下一个 5 分钟刻度，再用 `DISPATCH_TOKEN` secret 调 API 触发下一次运行。链条播种一次即永久自续；若彻底中断，手动 Run workflow 一次即可重新播种。
+- `on: schedule: */5` 保留为备用种子：若 GitHub 哪天恢复触发，它也能驱动/续链；链式步骤发现已有 ≥2 个运行在排队时会自动不补种，不会叠加。
+- tick 内两段式判定（非发送窗口的 tick 用纯标准库快速跳过，不装依赖）：
   - tick 落在 **:20-:29** → 精确等到 :30 发送（准点）
   - tick 落在 **:30-:59** 且闸门未命中 → 立即补发（最多晚 29 分钟）
   - tick 落在 **:00-:19** → 快速跳过（后续 tick 处理）
-- 每个发送时段有 **8 个冗余 tick**，只要任意一个被调度到就能发出；单个/多个 tick 丢失会自动自愈。
 - **防重复**：脚本时段闸门（同一北京小时只发一封，状态写入 `state/` 并提交回仓库）+ `concurrency` 排队（后续 tick 用最新仓库状态判断）。
 - 发送任务：作文时段 = 北京 05/08/11/14/17/20/23 时的 :30；高考倒计时 = 北京每天 05:30。
 - 发送失败自动重试 3 次（指数退避）；失败时段的闸门不会写入，后续 tick 会继续重试到时段结束。
 - 模型降级链：`ZHIPU_MODEL` 未设置时自动按 glm-4.7-flash → glm-4.5-flash → glm-4-flash-250414 逐个降级（429/超时自动切换）。
+- 环境极简：不用 `setup-python`，直接用 runner 系统自带 python3（2026-11-15 新 runner 镜像上 setup-python 的 pip 缓存步骤曾导致所有 tick 失败）。
 
 保活：GitHub 会在仓库连续 60 天无提交后自动禁用定时工作流，`keepalive.yml` 每周自动打一个空提交（`[skip ci]`，不触发其他工作流）。
 

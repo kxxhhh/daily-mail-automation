@@ -43,20 +43,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-        # 2026-11-15 起新 runner 镜像无预置 pip 缓存目录，cache: pip 会直接报错；
-        # 依赖仅 lunardate 一个小包，缓存收益趋近于零，移除。
-
       - name: Quick skip (stdlib only)
         env:
           FORCE_ESSAY: ${{ inputs.force_essay }}
           FORCE_GAOKAO: ${{ inputs.force_gaokao }}
           IGNORE_GATE: ${{ inputs.ignore_gate }}
         run: |
-          # 第一段判定：纯标准库、不装依赖。非发送窗口（时段小时的 :20-:59 之外）直接跳过，
-          # 省掉 pip install + 完整判定的开销（全天大部分 tick 走这里）。
+          # 第一步判定：纯标准库、系统自带 python3，连 setup-python 都不用。
+          # 非发送窗口（时段小时的 :20-:59 之外）直接跳过，省掉环境准备 + 判定的开销。
           python3 - <<'EOF'
           import os
           from datetime import datetime, timedelta, timezone
@@ -76,8 +70,10 @@ jobs:
           EOF
 
       - name: Install dependencies
+        # 不用 setup-python：脚本纯标准库 + lunardate（纯 Python），系统 python3 足够。
+        # 2026-11-15 setup-python/cache 在新 runner 镜像上导致全部 tick 失败，整块移除。
         if: env.QUICK_SKIP != 'true'
-        run: pip install -r requirements.txt
+        run: python3 -m pip install --quiet -r requirements.txt
 
       - name: Check due
         if: env.QUICK_SKIP != 'true'
@@ -150,7 +146,7 @@ jobs:
             # 重试（指数退避）：模型 API 偶发 429/读超时；失败发生在发信前，重试不会重复发信
             for i in 1 2 3; do
               echo "=== essay 第 $i/3 次尝试 ==="
-              if python scripts/essay_hourly.py $ARGS_E; then break; fi
+              if python3 scripts/essay_hourly.py $ARGS_E; then break; fi
               if [ "$i" -lt 3 ]; then
                 sleep $((i * 45))
               else
@@ -161,7 +157,7 @@ jobs:
           if [ "$DUE_GAOKAO" = "true" ]; then
             for i in 1 2 3; do
               echo "=== gaokao 第 $i/3 次尝试 ==="
-              if python scripts/gaokao_countdown.py $ARGS_G; then break; fi
+              if python3 scripts/gaokao_countdown.py $ARGS_G; then break; fi
               if [ "$i" -lt 3 ]; then
                 sleep $((i * 45))
               else
