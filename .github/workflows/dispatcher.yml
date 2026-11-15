@@ -46,7 +46,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+        # 2026-11-15 起新 runner 镜像无预置 pip 缓存目录，cache: pip 会直接报错；
+        # 依赖仅 lunardate 一个小包，缓存收益趋近于零，移除。
 
       - name: Quick skip (stdlib only)
         env:
